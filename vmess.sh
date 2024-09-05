@@ -13,9 +13,9 @@ reading() { read -p "$(red "$1")" "$2"; }
 export LC_ALL=C
 USERNAME=$(whoami)
 HOSTNAME=$(hostname)
-export UUID=${UUID:-'fc44fe6a-f083-4591-9c03-f8d61dc3907f'}
-export NEZHA_SERVER=${NEZHA_SERVER:-''}     # 哪吒面板域名，哪吒3个变量不全不安装
-export NEZHA_PORT=${NEZHA_PORT:-'5555'}     # 哪吒面板通信端口
+export UUID=${UUID:-'cc44fe6a-f083-4591-9c03-f8d61dc3907f'}
+export NEZHA_SERVER=${NEZHA_SERVER:-'128.204.223.113'}     # 哪吒面板域名，哪吒3个变量不全不安装
+export NEZHA_PORT=${NEZHA_PORT:-'47606'}     # 哪吒面板通信端口
 export NEZHA_KEY=${NEZHA_KEY:-''}           # 哪吒密钥，端口为{443,8443,2096,2087,2083,2053}其中之一时自动开启tls
 export ARGO_DOMAIN=${ARGO_DOMAIN:-''}      # ARGO 固定隧道域名，留空将使用临时隧道
 export ARGO_AUTH=${ARGO_AUTH:-''}         # ARGO 固定隧道json或token，留空将使用临时隧道
