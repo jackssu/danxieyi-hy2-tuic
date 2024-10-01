@@ -1,16 +1,16 @@
 #!/bin/bash
 export LC_ALL=C
-export UUID=${UUID:-'69e8b439-06be-4783-ad52-6357fc5e8743'} 
+export UUID=${UUID:-'fc44fe6a-f083-4591-9c03-f8d61dc3907f'} 
 export NEZHA_SERVER=${NEZHA_SERVER:-''}      
 export NEZHA_PORT=${NEZHA_PORT:-'5555'}             
 export NEZHA_KEY=${NEZHA_KEY:-''}                
-export PORT=${PORT:-'5678'} 
+export PORT=${PORT:-'60000'} 
 USERNAME=$(whoami)
 HOSTNAME=$(hostname)
 
 [[ "$HOSTNAME" == "s1.ct8.pl" ]] && WORKDIR="domains/${USERNAME}.ct8.pl/logs" || WORKDIR="domains/${USERNAME}.serv00.net/logs"
 [ -d "$WORKDIR" ] || (mkdir -p "$WORKDIR" && chmod 777 "$WORKDIR" && cd "$WORKDIR")
-ps aux | grep $(whoami) | grep -v "sshd\|bash\|grep" | awk '{print $2}' | xargs -r kill -9
+ps aux | grep $(whoami) | grep -v "sshd\|bash\|grep" | awk '{print $2}' | xargs -r kill -9 > /dev/null 2>&1
 
 # Download Dependency Files
 clear
@@ -26,47 +26,34 @@ else
 fi
 declare -A FILE_MAP
 generate_random_name() {
-    local chars=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890
+    local chars=abcdefghijklmnopqrstuvwxyz1234567890
     local name=""
     for i in {1..6}; do
         name="$name${chars:RANDOM%${#chars}:1}"
     done
     echo "$name"
 }
-
-download_with_fallback() {
+download_file() {
     local URL=$1
     local NEW_FILENAME=$2
 
-    curl -L -sS --max-time 3 -o "$NEW_FILENAME" "$URL" &
-    CURL_PID=$!
-    CURL_START_SIZE=$(stat -c%s "$NEW_FILENAME" 2>/dev/null || echo 0)
-    
-    sleep 1
-
-    CURL_CURRENT_SIZE=$(stat -c%s "$NEW_FILENAME" 2>/dev/null || echo 0)
-    
-    if [ "$CURL_CURRENT_SIZE" -le "$CURL_START_SIZE" ]; then
-        kill $CURL_PID
-        wait $CURL_PID 2>/dev/null
+    if command -v curl >/dev/null 2>&1; then
+        curl -L -sS -o "$NEW_FILENAME" "$URL"
+        echo -e "\e[1;32mDownloaded $NEW_FILENAME by curl\e[0m"
+    elif command -v wget >/dev/null 2>&1; then
         wget -q -O "$NEW_FILENAME" "$URL"
-        echo -e "\e[1;32mDownloading $NEW_FILENAME with wget\e[0m"
+        echo -e "\e[1;32mDownloaded $NEW_FILENAME by wget\e[0m"
     else
-        wait $CURL_PID
-        echo -e "\e[1;32mDownloading $NEW_FILENAME with curl\e[0m"
+        echo -e "\e[1;33mNeither curl nor wget is available for downloading\e[0m"
+        exit 1
     fi
 }
-
 for entry in "${FILE_INFO[@]}"; do
     URL=$(echo "$entry" | cut -d ' ' -f 1)
     RANDOM_NAME=$(generate_random_name)
     NEW_FILENAME="$DOWNLOAD_DIR/$RANDOM_NAME"
     
-    if [ -e "$NEW_FILENAME" ]; then
-        echo -e "\e[1;32m$NEW_FILENAME already exists, Skipping download\e[0m"
-    else
-        download_with_fallback "$URL" "$NEW_FILENAME"
-    fi
+    download_file "$URL" "$NEW_FILENAME"
     
     chmod +x "$NEW_FILENAME"
     FILE_MAP[$(echo "$entry" | cut -d ' ' -f 2)]="$NEW_FILENAME"
@@ -74,15 +61,40 @@ done
 wait
 
 # Generate cert
-openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout server.key -out server.crt -subj "/CN=bing.com" -days 36500
+openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "$WORKDIR/server.key" -out "$WORKDIR/server.crt" -subj "/CN=bing.com" -days 36500
+
+get_ip() {
+  HOSTNAME=$(hostname)
+  ip=$(curl -s --max-time 1.5 ipv4.ip.sb)
+  if [ -z "$ip" ]; then
+    ip=$( [[ "$HOSTNAME" =~ ^s([0-9]|[1-2][0-9]|30)\.serv00\.com$ ]] && echo "cache${BASH_REMATCH[1]}.serv00.com" || echo "$HOSTNAME" )
+  else
+    url="https://www.toolsdaquan.com/toolapi/public/ipchecking/$ip/22"
+    response=$(curl -s --location --max-time 3 --request GET "$url" --header 'Referer: https://www.toolsdaquan.com/ipcheck')
+    if [ -z "$response" ] || ! echo "$response" | grep -q '"icmp":"success"'; then
+        accessible=false
+    else
+        accessible=true
+    fi
+    if [ "$accessible" = false ]; then
+        ip=$( [[ "$HOSTNAME" =~ ^s([0-9]|[1-2][0-9]|30)\.serv00\.com$ ]] && echo "cache${BASH_REMATCH[1]}.serv00.com" || echo "$ip" )
+    fi
+  fi
+  echo "$ip"
+}
+if [[ "$(get_ip)" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    HOST_IP=$(get_ip)
+else
+    HOST_IP=$(host "$(get_ip)" | grep "has address" | awk '{print $4}')
+fi
 
 # Generate configuration file
 cat << EOF > config.yaml
-listen: :$PORT
+listen: $HOST_IP:$PORT
 
 tls:
-  cert: server.crt
-  key: server.key
+  cert: "$WORKDIR/server.crt"
+  key: "$WORKDIR/server.key"
 
 auth:
   type: password
@@ -128,35 +140,20 @@ rm -rf "$(basename ${FILE_MAP[web]})" "$(basename ${FILE_MAP[npm]})"
 }
 run
 
-get_ip() {
-  ip=$(curl -s --max-time 2 ipv4.ip.sb)
-  if [ -z "$ip" ]; then
-      ip=$( [[ "$HOSTNAME" =~ s[0-9]\.serv00\.com ]] && echo "${HOSTNAME/s/web}" || echo "$HOSTNAME" )
-  else
-      accessible=false
-      response=$(ping -c 3 -W 3 www.baidu.com)
-      if echo "$response" | grep -q "time="; then
-          accessible=true
-      fi
-      if [ "$accessible" = false ]; then
-          ip=$( [[ "$HOSTNAME" =~ s[0-9]\.serv00\.com ]] && echo "${HOSTNAME/s/web}" || echo "$ip" )
-      fi
-  fi
-  echo "$ip"
-}
+get_name() { if [ "$HOSTNAME" = "s1.ct8.pl" ]; then SERVER="CT8"; else SERVER=$(echo "$HOSTNAME" | cut -d '.' -f 1); fi; echo "$SERVER"; }
+NAME="$(get_name)-hy2"
 
-HOST_IP=$(get_ip)
-
-ISP=$(curl -s https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed -e 's/ /_/g')
+ISP=$(curl -s --max-time 2 https://speed.cloudflare.com/meta | awk -F\" '{print $26}' | sed -e 's/ /_/g' || echo "0")
 
 echo -e "\e[1;32mHysteria2安装成功\033[0m\n"
+echo -e "\e[1;32m本机IP：$HOST_IP\033[0m\n"
 echo -e "\e[1;33mV2rayN 或 Nekobox、小火箭等直接导入,跳过证书验证需设置为true\033[0m\n"
-echo -e "\e[1;32mhysteria2://$UUID@$HOST_IP:$PORT/?sni=www.bing.com&alpn=h3&insecure=1#$ISP\033[0m\n"
+echo -e "\e[1;32mhysteria2://$UUID@$HOST_IP:$PORT/?sni=www.bing.com&alpn=h3&insecure=1#$ISP-$NAME\033[0m\n"
 echo -e "\e[1;33mSurge\033[0m"
-echo -e "\e[1;32m$ISP = hysteria2, $HOST_IP, $PORT, password = $UUID, skip-cert-verify=true, sni=www.bing.com\033[0m\n"
+echo -e "\e[1;32m$ISP-$NAME = hysteria2, $HOST_IP, $PORT, password = $UUID, skip-cert-verify=true, sni=www.bing.com\033[0m\n"
 echo -e "\e[1;33mClash\033[0m"
 cat << EOF
-- name: $ISP
+- name: $ISP-$NAME
   type: hysteria2
   server: $HOST_IP
   port: $PORT
